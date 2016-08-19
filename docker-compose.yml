@@ -17,9 +17,9 @@ services:
     ports:
       - "2225:22"
     # test
-    command: /sbin/my_init
+    #command: /sbin/my_init
     # production
-    # command: python3 ./echo_bot.py
+    command: python3 ./rssbot.py
 
 
   data:

@@ -12,7 +12,10 @@ dockerized container with Python3, PostgreSQL, python-telegram-bot onboard.
 
 	- git clone https://github.com/achicha/rssbot.git rssbot
 	- docker-compose stop && docker-compose rm -f && docker-compose build --no-cache project && docker-compose up -d
-	- create Database outside of container with Pycharm (ssh needed) or inside via psql (CREATE DATABASE demo;)
+	- create Database:
+		- outside of container with Pycharm (ssh needed)
+		- or inside: (psql -h 127.0.0.1 -p 5432 -U postgres) and (CREATE DATABASE rsstelebot;)
+	- add ./config.ini with valid data (see config-example.ini)
 
 - Commands:
 
