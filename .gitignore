@@ -1,0 +1,4 @@
+config.ini
+/pgdata
+*.pub
+helper

@@ -1,0 +1,42 @@
+# docker-compose stop && docker-compose rm -f && docker-compose build --no-cache project && docker-compose up -d
+
+version: '2'
+services:
+  project:
+    restart: always
+    container_name: bot
+#    image: telegrambot_project
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /opt/project
+    links:
+      - postgres
+    volumes:
+      - ./:/opt/project
+    ports:
+      - "2225:22"
+    # test
+    command: /sbin/my_init
+    # production
+    # command: python3 ./echo_bot.py
+
+
+  data:
+    restart: 'no'
+    image: postgres:9.5
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    command: echo "start data container"
+
+
+  postgres:
+    restart: always
+    image: postgres:9.5
+    environment:
+      POSTGRES_PASSWORD: 'secret'
+      POSTGRES_DB: 'rsstelebot'
+    volumes_from:
+      - data
+    ports:
+      - "5432:5432"
