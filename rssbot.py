@@ -90,7 +90,10 @@ class Database:
     def subscribe_feed(self, chat_id, feed):
         # add user_feed relations
         sel = self._db.prepare("SELECT feed_id, rssfeed FROM feeds WHERE rssfeed=($1);")
-        if len(self._db.query("SELECT * FROM user_feeds;")) > 0:
+        feed_id = int(sel(feed)[0][0])
+        p = self._db.prepare("SELECT * FROM user_feeds "
+                             "WHERE chat_id = $1 AND feed_id = $2;")
+        if len(p(chat_id, feed_id)) > 0:
             return 'this feed already added. \n' \
                    'Get recent posts: /get {0} <number of posts>'.format(int(sel(feed)[0][0]))
 
