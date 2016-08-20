@@ -2,3 +2,4 @@ config.ini
 /pgdata
 *.pub
 helper
+/.idea

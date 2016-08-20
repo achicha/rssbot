@@ -1,4 +1,5 @@
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Job
+from telegram import ParseMode
 from random import randint
 import logging
 import feedparser
@@ -147,21 +148,31 @@ class Database:
             feed_time_upd(int(time.time()), _id)
             print('updated {0} , total posts: {1}'.format(feed, len(all_posts(_id))))
 
-    def not_published(self):
+    def not_published(self, feed_to_update=None):
         """
         find all new posts and update published_time to current time
         :return: new posts
         """
-        p = self._db.query("SELECT title, link, chat_id FROM posts "
-                           "INNER JOIN feeds ON posts.feed_id = feeds.feed_id "
-                           "INNER JOIN user_feeds ON feeds.feed_id = user_feeds.feed_id "
-                           "WHERE publish_time = 0 ORDER BY  posts.post_time;")
+        if feed_to_update:
+            pre = self._db.prepare("SELECT title, link, chat_id FROM posts "
+                                   "INNER JOIN feeds ON posts.feed_id = feeds.feed_id "
+                                   "INNER JOIN user_feeds ON feeds.feed_id = user_feeds.feed_id "
+                                   "WHERE publish_time = 0 AND rssfeed = $1 "
+                                   "ORDER BY  posts.post_time;")
+            p = pre(feed_to_update)
+            result = []
+        else:
+            p = self._db.query("SELECT title, link, chat_id FROM posts "
+                               "INNER JOIN feeds ON posts.feed_id = feeds.feed_id "
+                               "INNER JOIN user_feeds ON feeds.feed_id = user_feeds.feed_id "
+                               "WHERE publish_time = 0 ORDER BY  posts.post_time;")
+            result = p
         if len(p) > 0:
             mp = self._db.prepare("UPDATE posts SET publish_time = $1 "
                                   "WHERE publish_time = 0")
             mp(int(time.time()))
-            print('new posts are published and published time was updated')
-        return p
+            # print('new posts are published and published time was updated')
+        return result
 
     def __del__(self):
         self._db.close
@@ -195,7 +206,7 @@ def get(bot, update, args):
             bot.sendMessage(chat_id, text="looks like empty feed...")
             return
         for i in recent_posts:
-            bot.sendMessage(chat_id, text=i[1] + ' ' + i[2])
+            bot.sendMessage(chat_id, text=i[1] + '\n' + i[2])
 
     except (IndexError, ValueError):
         bot.sendMessage(chat_id, text='Usage: /get <number of posts>')
@@ -225,22 +236,27 @@ def add(bot, update, job_queue, args):
     try:
         feed = str(args[0])
         d = Database(chat_id)
+        # try to add feed
         add_feed = d.add_feed(feed)
         if add_feed != 'Invalid rss feed. Please try again':
+            # if feed was added then try to subscribe to this feed
             subscribe = d.subscribe_feed(chat_id, feed)
             # update feeds
             job_updater = Job(upd, 1.0, repeat=False,
                               context=update.message.chat_id)
-            job_queue.put(job_updater)
 
+            job_clear_new_posts = Job(pub, 1.0,
+                                      repeat=False,
+                                      context=[update.message.chat_id, feed])
+            job_queue.put(job_updater)
+            job_queue.put(job_clear_new_posts)
             bot.sendMessage(chat_id, text=subscribe)
     except (IndexError, ValueError):
         bot.sendMessage(chat_id, text='Usage: /add <rss feed string>')
 
 
-def upd(bot, job, xz=0):
+def upd(bot, job):
     """ update POSTS DB"""
-    print(xz)
     chat_id = job.context
     d = Database(chat_id)
     d.update_all_feeds()
@@ -249,15 +265,18 @@ def upd(bot, job, xz=0):
 
 def pub(bot, job):
     """ Publish new posts from DB to telegram user"""
-    chat_id = job.context
+    chat_id = job.context[0]
     d = Database(chat_id)
-    new_posts = d.not_published()
+    if len(job.context) > 1:
+        new_posts = d.not_published(feed_to_update=job.context[1])
+    else:
+        new_posts = d.not_published()
     if len(new_posts) < 1:
         # bot.sendMessage(chat_id=chat_id, text='could not find any new posts')
         return
     for i in new_posts:
         bot.sendMessage(chat_id=i[2], text=i[0] + ' ' + i[1])
-        time.sleep(randint(1, 4))
+        # time.sleep(randint(1, 4))
 
 
 def callback_timer(bot, update, job_queue):
@@ -266,7 +285,7 @@ def callback_timer(bot, update, job_queue):
     job_updater = Job(upd, 300.0, repeat=True,
                       context=update.message.chat_id)
     job_publisher = Job(pub, 150.0, repeat=True,
-                        context=update.message.chat_id)
+                        context=[update.message.chat_id])
     job_queue.put(job_updater, next_t=0.0)
     job_queue.put(job_publisher, next_t=0.0)
 

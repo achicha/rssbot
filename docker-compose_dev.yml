@@ -1,4 +1,4 @@
-# docker-compose stop && docker-compose rm -f && docker-compose build --no-cache project && docker-compose up -d
+# docker-compose stop && docker-compose rm -f && docker-compose -f docker-compose_dev.yml up --build -d
 
 version: '2'
 services:
@@ -8,7 +8,7 @@ services:
     #image: telegrambot_project
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile_dev
     working_dir: /opt/project
     links:
       - postgres
@@ -16,7 +16,7 @@ services:
       - ./:/opt/project
     ports:
       - "2225:22"
-    command: python3 ./rssbot.py
+    command: /sbin/my_init
 
 
   data:
