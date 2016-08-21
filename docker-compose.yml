@@ -16,7 +16,7 @@ services:
       - ./:/opt/project
     ports:
       - "2225:22"
-    command: python3 ./rssbot.py
+    command: python3 ./rssbot.py &
 
 
   data:

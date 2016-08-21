@@ -1,5 +1,5 @@
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Job
-from telegram import ParseMode
+from telegram import ReplyKeyboardMarkup, KeyboardButton
 from random import randint
 import logging
 import feedparser
@@ -24,17 +24,31 @@ class RssParser(object):
     We need just title, link and published date
     """
 
-    def __init__(self, config_links):
-        self.links = [config_links]
+    def __init__(self, link, custom_feed):
+        self.link = link
+        self.custom_link = custom_feed
         self.news = []
         self.refresh()
 
     def refresh(self):
         self.news = []
-        for i in self.links:
-            data = feedparser.parse(i)
+        if self.custom_link == 0:
+            data = feedparser.parse(self.link)
             self.news += [(i['title'], i['link'],
                            int(time.mktime(i['published_parsed']))) for i in data['entries']]
+        elif self.custom_link == 1:
+            if self.link == 'http://www.ixbt.com/export/news.rss':
+                data = feedparser.parse(self.link)
+                self.news += [(d['title'], d['link'],
+                               int(time.mktime(d['published_parsed']))) for d in data['entries'] if
+                              'xiaomi' in d['summary']]
+            elif self.link == 'http://feeds.macrumors.com/MacRumors-Front':
+                data = feedparser.parse(self.link)
+                self.news += set([(key['title'], key['link'], int(time.mktime(key['published_parsed'])))
+                                  for key in data['entries'] for tag in key['tags']
+                                  if tag['term'].lower() in ['retina macbook pro', 'macbook air', 'ipad', 'mac']])
+        else:
+            pass
 
 
 class Database:
@@ -72,41 +86,39 @@ class Database:
 
         print('DB init')
 
-    def add_feed(self, feed):
-        sel = self._db.prepare("SELECT * FROM feeds WHERE rssfeed=($1);")
-        if len(sel(feed)) > 0:
+    def add_feed(self, feed, custom_feed=0):
+        sel = self._db.prepare("SELECT * FROM feeds WHERE rssfeed=($1) AND custom_feed =($2);")
+        if len(sel(feed, custom_feed)) > 0:
             return 'already added'
         else:
             # check valid rss feed
-            p = RssParser(feed)
+            p = RssParser(feed, custom_feed)
             posts = p.news
             if len(posts) < 1:
                 return 'Invalid rss feed. Please try again'
             # add feed to feeds table
-            _ins_feed = self._db.prepare("INSERT INTO feeds (rssfeed) VALUES ($1);")
-            _ins_feed(feed)
+            _ins_feed = self._db.prepare("INSERT INTO feeds (rssfeed, custom_feed) VALUES ($1, $2);")
+            _ins_feed(feed, custom_feed)
             return '{0} feed added. \n' \
-                   'Get recent posts: /get {1} <number of posts>'.format(feed, int(sel(feed)[0][0]))
+                   'Get recent posts: /get {1} <number of posts>'.format(feed, int(sel(feed, custom_feed)[0][0]))
 
-    def subscribe_feed(self, chat_id, feed):
+    def subscribe_feed(self, chat_id, feed, custom_feed):
         # add user_feed relations
-        sel = self._db.prepare("SELECT feed_id, rssfeed FROM feeds WHERE rssfeed=($1);")
-        feed_id = int(sel(feed)[0][0])
-        p = self._db.prepare("SELECT * FROM user_feeds "
-                             "WHERE chat_id = $1 AND feed_id = $2;")
+        sel = self._db.prepare("SELECT feed_id, rssfeed FROM feeds WHERE rssfeed=($1) AND custom_feed = $2;")
+        feed_id = int(sel(feed, custom_feed)[0][0])
+        p = self._db.prepare("SELECT * FROM user_feeds WHERE chat_id = $1 AND feed_id = $2;")
         if len(p(chat_id, feed_id)) > 0:
             return 'this feed already added. \n' \
-                   'Get recent posts: /get {0} <number of posts>'.format(int(sel(feed)[0][0]))
+                   'Get recent posts: /get {0} <number of posts>'.format(feed_id)
 
         _ins_uf = self._db.prepare("INSERT INTO user_feeds (feed_id, chat_id) VALUES ($1, $2);")
-        _ins_uf(int(sel(feed)[0][0]), chat_id)
-        return 'Subscribed to {}'.format((sel(feed)[0][1]))
+        _ins_uf(int(sel(feed, custom_feed)[0][0]), chat_id)
+        return 'Subscribed to {}'.format((sel(feed, custom_feed)[0][1]))
 
     def unsubscribe_feed(self, feed_id):
         # remove user relation to this feed
         dd = self._db.prepare("DELETE FROM user_feeds WHERE feed_id = $1;")
         dd(int(feed_id))
-        print(feed_id)
         s = self._db.prepare("SELECT trim(rssfeed) FROM feeds WHERE feed_id = $1;")
         return 'Unsubscribed from {}'.format(s(int(feed_id))[0][0])
 
@@ -130,22 +142,24 @@ class Database:
 
     def update_all_feeds(self):
         # select feeds which were updated more than 450 second ago.
-        rss_feeds = self._db.prepare("SELECT feed_id, trim(rssfeed) FROM feeds WHERE updated < $1 - 450;")
+        rss_feeds = self._db.prepare("SELECT feed_id, trim(rssfeed), custom_feed FROM feeds WHERE updated < $1 - 450;")
         feeds_to_update = rss_feeds(int(time.time()))
-
         # add new posts and update updated_time for every feed
         posts_upd = self._db.prepare("INSERT INTO posts (feed_id, title, link, post_time) VALUES ($1, $2, $3, $4);")
         feed_time_upd = self._db.prepare("UPDATE feeds SET updated = $1 WHERE feed_id = $2;")
         all_posts = self._db.prepare("SELECT trim(title), trim(link), post_time FROM posts WHERE feed_id = $1;")
+        old_posts = self._db.prepare("DELETE FROM posts WHERE link IN "
+                                     "(SELECT link FROM posts WHERE feed_id = $1 ORDER BY post_time LIMIT 5);")
 
-        for _id, feed in feeds_to_update:
-            p = RssParser(feed)
+        for _id, feed, custom_feed in feeds_to_update:
+            p = RssParser(feed, custom_feed)
             new_posts = p.news
             _all = all_posts(_id)
             for post in new_posts:
                 if post not in _all:
                     posts_upd(_id, post[0], post[1], post[2])
             feed_time_upd(int(time.time()), _id)
+            (old_posts(_id))  # delete old posts
             print('updated {0} , total posts: {1}'.format(feed, len(all_posts(_id))))
 
     def not_published(self, feed_to_update=None):
@@ -171,7 +185,6 @@ class Database:
             mp = self._db.prepare("UPDATE posts SET publish_time = $1 "
                                   "WHERE publish_time = 0")
             mp(int(time.time()))
-            # print('new posts are published and published time was updated')
         return result
 
     def __del__(self):
@@ -180,7 +193,11 @@ class Database:
 
 # ----------------------------------------------------------------------------------------------------
 def start(bot, update):
+    custom_keyboard = [['/help', '/show']]
+    reply_markup = ReplyKeyboardMarkup(custom_keyboard, resize_keyboard=True)
+
     bot.sendMessage(update.message.chat_id,
+                    reply_markup=reply_markup,
                     text="""Hi! Use:
  /help
  /show -> show all added rss feeds
@@ -236,11 +253,15 @@ def add(bot, update, job_queue, args):
     try:
         feed = str(args[0])
         d = Database(chat_id)
+        custom_feed = 0
+        if len(args) == 2:
+            custom_feed = int(args[1])
+
         # try to add feed
-        add_feed = d.add_feed(feed)
+        add_feed = d.add_feed(feed, custom_feed)
         if add_feed != 'Invalid rss feed. Please try again':
             # if feed was added then try to subscribe to this feed
-            subscribe = d.subscribe_feed(chat_id, feed)
+            subscribe = d.subscribe_feed(chat_id, feed, custom_feed)
             # update feeds
             job_updater = Job(upd, 1.0, repeat=False,
                               context=update.message.chat_id)
