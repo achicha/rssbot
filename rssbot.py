@@ -68,7 +68,7 @@ class Database:
             self._db.execute("CREATE TABLE feeds (feed_id SERIAL PRIMARY KEY, "
                              "rssfeed CHAR(300), updated INT DEFAULT 0, custom_feed INT DEFAULT 0);")
             print('feeds table created')
-        # create posts table
+        # create posts tabletotal posts:
         try:
             self._db.query("SELECT * FROM posts;")
             print('posts init')
@@ -94,7 +94,7 @@ class Database:
             # check valid rss feed
             p = RssParser(feed, custom_feed)
             posts = p.news
-            if len(posts) < 1:
+            if len(posts) < 1 and custom_feed == 0:
                 return 'Invalid rss feed. Please try again'
             # add feed to feeds table
             _ins_feed = self._db.prepare("INSERT INTO feeds (rssfeed, custom_feed) VALUES ($1, $2);")
@@ -148,8 +148,8 @@ class Database:
         posts_upd = self._db.prepare("INSERT INTO posts (feed_id, title, link, post_time) VALUES ($1, $2, $3, $4);")
         feed_time_upd = self._db.prepare("UPDATE feeds SET updated = $1 WHERE feed_id = $2;")
         all_posts = self._db.prepare("SELECT trim(title), trim(link), post_time FROM posts WHERE feed_id = $1;")
-        old_posts = self._db.prepare("DELETE FROM posts WHERE link IN "
-                                     "(SELECT link FROM posts WHERE feed_id = $1 ORDER BY post_time LIMIT 5);")
+        old_posts = self._db.prepare("DELETE FROM posts WHERE link NOT IN "
+                                     "(SELECT link FROM posts WHERE feed_id = $1 ORDER BY post_time DESC LIMIT 30);")
 
         for _id, feed, custom_feed in feeds_to_update:
             p = RssParser(feed, custom_feed)
@@ -159,8 +159,11 @@ class Database:
                 if post not in _all:
                     posts_upd(_id, post[0], post[1], post[2])
             feed_time_upd(int(time.time()), _id)
-            (old_posts(_id))  # delete old posts
-            print('updated {0} , total posts: {1}'.format(feed, len(all_posts(_id))))
+
+            al = all_posts(_id)
+            if len(al) > 30:
+                (old_posts(_id))  # delete old posts
+            # print('updated {0} , total posts: {1}'.format(feed, len(all_posts(_id))))
 
     def not_published(self, feed_to_update=None):
         """
@@ -259,7 +262,9 @@ def add(bot, update, job_queue, args):
 
         # try to add feed
         add_feed = d.add_feed(feed, custom_feed)
-        if add_feed != 'Invalid rss feed. Please try again':
+        if add_feed == 'Invalid rss feed. Please try again':
+            bot.sendMessage(chat_id, text=add_feed)
+        else:
             # if feed was added then try to subscribe to this feed
             subscribe = d.subscribe_feed(chat_id, feed, custom_feed)
             # update feeds
@@ -303,7 +308,7 @@ def pub(bot, job):
 def callback_timer(bot, update, job_queue):
     bot.sendMessage(chat_id=update.message.chat_id,
                     text='updater started!')
-    job_updater = Job(upd, 300.0, repeat=True,
+    job_updater = Job(upd, 200.0, repeat=True,
                       context=update.message.chat_id)
     job_publisher = Job(pub, 150.0, repeat=True,
                         context=[update.message.chat_id])
