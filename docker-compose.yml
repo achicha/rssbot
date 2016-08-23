@@ -29,10 +29,9 @@ services:
 
   postgres:
     restart: always
-    image: postgres:9.5
-    environment:
-      POSTGRES_PASSWORD: 'secret'
-      POSTGRES_DB: 'rsstelebot'
+    build:
+      context: .
+      dockerfile: Dockerfile_postgres
     volumes_from:
       - data
     ports:

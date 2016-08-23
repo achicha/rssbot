@@ -1,4 +1,6 @@
-# docker-compose stop && docker-compose rm -f && docker-compose -f docker-compose_dev.yml up --build -d
+# docker-compose down && docker-compose -f docker-compose_dev.yml up --build -d
+# show containers ip
+# docker inspect -f '{{.Name}} - {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $(docker ps -aq)
 
 version: '2'
 services:
@@ -29,10 +31,12 @@ services:
 
   postgres:
     restart: always
-    image: postgres:9.5
-    environment:
-      POSTGRES_PASSWORD: 'secret'
-      POSTGRES_DB: 'rsstelebot'
+    build:
+      context: .
+      dockerfile: Dockerfile_postgres
+    #environment:
+      #POSTGRES_PASSWORD: 'secret'
+      #POSTGRES_DB: 'rsstelebot'
     volumes_from:
       - data
     ports:

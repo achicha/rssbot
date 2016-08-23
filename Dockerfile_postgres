@@ -1,0 +1,7 @@
+FROM postgres:9.5
+
+ENV POSTGRES_USER docker
+ENV POSTGRES_PASSWORD secret
+ENV POSTGRES_DB rssbot
+
+ADD CreateDB.sql /docker-entrypoint-initdb.d/

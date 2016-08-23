@@ -1,6 +1,5 @@
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Job
 from telegram import ReplyKeyboardMarkup, KeyboardButton
-from random import randint
 import logging
 import feedparser
 import time
@@ -8,8 +7,8 @@ import postgresql
 import configparser
 
 # Enable logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    level=logging.ERROR)
+logging.basicConfig(filename='log_filename.txt', format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # load config from file
@@ -17,6 +16,7 @@ config = configparser.ConfigParser()
 config.read('./config.ini')
 db_path = config['Database']['Path']
 bot_access_token = config['Telegram']['access_token']
+logger.warning('restart')
 
 
 class RssParser(object):
@@ -60,31 +60,6 @@ class Database:
     def __init__(self, chat_id):
         self._db = postgresql.open(db_path)
         self.char_id = chat_id
-        # create feeds table
-        try:
-            self._db.query("SELECT * FROM feeds;")
-            print('feeds init')
-        except:
-            self._db.execute("CREATE TABLE feeds (feed_id SERIAL PRIMARY KEY, "
-                             "rssfeed CHAR(300), updated INT DEFAULT 0, custom_feed INT DEFAULT 0);")
-            print('feeds table created')
-        # create posts tabletotal posts:
-        try:
-            self._db.query("SELECT * FROM posts;")
-            print('posts init')
-        except:
-            self._db.execute("CREATE TABLE posts (feed_id INT REFERENCES feeds(feed_id), title CHAR(1000), "
-                             "link CHAR(1000), post_time INT, publish_time INT DEFAULT 0);")
-            print('posts table created')
-        # create user_feeds
-        try:
-            self._db.query("SELECT * FROM user_feeds;")
-            print('user_feeds init')
-        except:
-            self._db.execute("CREATE TABLE user_feeds (feed_id INT REFERENCES feeds(feed_id), chat_id INT);")
-            print('user_feeds table created')
-
-        print('DB init')
 
     def add_feed(self, feed, custom_feed=0):
         sel = self._db.prepare("SELECT * FROM feeds WHERE rssfeed=($1) AND custom_feed =($2);")
@@ -99,12 +74,13 @@ class Database:
             # add feed to feeds table
             _ins_feed = self._db.prepare("INSERT INTO feeds (rssfeed, custom_feed) VALUES ($1, $2);")
             _ins_feed(feed, custom_feed)
+            logger.warning('add feed ' + feed + ' ' + str(custom_feed))
             return '{0} feed added. \n' \
                    'Get recent posts: /get {1} <number of posts>'.format(feed, int(sel(feed, custom_feed)[0][0]))
 
     def subscribe_feed(self, chat_id, feed, custom_feed):
         # add user_feed relations
-        sel = self._db.prepare("SELECT feed_id, rssfeed FROM feeds WHERE rssfeed=($1) AND custom_feed = $2;")
+        sel = self._db.prepare("SELECT feed_id, trim(rssfeed) FROM feeds WHERE rssfeed=($1) AND custom_feed = $2;")
         feed_id = int(sel(feed, custom_feed)[0][0])
         p = self._db.prepare("SELECT * FROM user_feeds WHERE chat_id = $1 AND feed_id = $2;")
         if len(p(chat_id, feed_id)) > 0:
@@ -113,6 +89,7 @@ class Database:
 
         _ins_uf = self._db.prepare("INSERT INTO user_feeds (feed_id, chat_id) VALUES ($1, $2);")
         _ins_uf(int(sel(feed, custom_feed)[0][0]), chat_id)
+        logger.warning('Subscribed to {}'.format(sel(feed, custom_feed)[0][1]))
         return 'Subscribed to {}'.format((sel(feed, custom_feed)[0][1]))
 
     def unsubscribe_feed(self, feed_id):
@@ -120,6 +97,7 @@ class Database:
         dd = self._db.prepare("DELETE FROM user_feeds WHERE feed_id = $1;")
         dd(int(feed_id))
         s = self._db.prepare("SELECT trim(rssfeed) FROM feeds WHERE feed_id = $1;")
+        logger.warning('Unsubscribed from {}'.format(s(int(feed_id))[0][0]))
         return 'Unsubscribed from {}'.format(s(int(feed_id))[0][0])
 
     def show_all_feeds(self, chat_id):
@@ -147,8 +125,9 @@ class Database:
         # add new posts and update updated_time for every feed
         posts_upd = self._db.prepare("INSERT INTO posts (feed_id, title, link, post_time) VALUES ($1, $2, $3, $4);")
         feed_time_upd = self._db.prepare("UPDATE feeds SET updated = $1 WHERE feed_id = $2;")
-        all_posts = self._db.prepare("SELECT trim(title), trim(link), post_time FROM posts WHERE feed_id = $1;")
-        old_posts = self._db.prepare("DELETE FROM posts WHERE link NOT IN "
+        all_posts = self._db.prepare("SELECT trim(title), trim(link), post_time FROM posts "
+                                     "WHERE feed_id = $1 ORDER BY post_time DESC;")
+        old_posts = self._db.prepare("DELETE FROM posts WHERE feed_id = $1 AND link NOT IN "
                                      "(SELECT link FROM posts WHERE feed_id = $1 ORDER BY post_time DESC LIMIT 30);")
 
         for _id, feed, custom_feed in feeds_to_update:
@@ -156,38 +135,54 @@ class Database:
             new_posts = p.news
             _all = all_posts(_id)
             for post in new_posts:
-                if post not in _all:
+                if len(_all) > 1:
+                    if post[2] > _all[0][2]:
+                        logger.info('add new post: {0} to {1}'.format(post[2], _id))
+                        posts_upd(_id, post[0], post[1], post[2])
+                else:
+                    logger.info('add new post: {0} to {1}'.format(post[2], _id))
                     posts_upd(_id, post[0], post[1], post[2])
             feed_time_upd(int(time.time()), _id)
 
             al = all_posts(_id)
             if len(al) > 30:
-                (old_posts(_id))  # delete old posts
-            # print('updated {0} , total posts: {1}'.format(feed, len(all_posts(_id))))
+                old_posts(_id)  # delete old posts
+                logger.info('more that 30 posts in {} feed, extras removed'.format(_id))
+            logger.info('updated {0} , total posts: {1}'.format(feed, len(all_posts(_id))))
 
     def not_published(self, feed_to_update=None):
         """
         find all new posts and update published_time to current time
         :return: new posts
         """
+
+        # if feed was just added we do not need any messages
         if feed_to_update:
-            pre = self._db.prepare("SELECT title, link, chat_id FROM posts "
-                                   "INNER JOIN feeds ON posts.feed_id = feeds.feed_id "
-                                   "INNER JOIN user_feeds ON feeds.feed_id = user_feeds.feed_id "
-                                   "WHERE publish_time = 0 AND rssfeed = $1 "
-                                   "ORDER BY  posts.post_time;")
-            p = pre(feed_to_update)
+            # find feed_id
+            f = self._db.prepare("SELECT feed_id FROM feeds WHERE rssfeed =$1;")
+            feed_id = f(feed_to_update)[0][0]
+            # publish_time = current time
+            mp = self._db.prepare("UPDATE posts SET publish_time = $1 "
+                                  "WHERE publish_time = 0 "
+                                  "AND feed_id = $2;")
+
+            mp(int(time.time()), int(feed_id))
             result = []
         else:
             p = self._db.query("SELECT title, link, chat_id FROM posts "
                                "INNER JOIN feeds ON posts.feed_id = feeds.feed_id "
                                "INNER JOIN user_feeds ON feeds.feed_id = user_feeds.feed_id "
                                "WHERE publish_time = 0 ORDER BY  posts.post_time;")
-            result = p
-        if len(p) > 0:
+
             mp = self._db.prepare("UPDATE posts SET publish_time = $1 "
-                                  "WHERE publish_time = 0")
+                                  "WHERE publish_time = 0;")
             mp(int(time.time()))
+
+            if len(p) > 0:
+                logger.warning("publish new posts: {}".format(len(p)))
+
+            result = p
+
         return result
 
     def __del__(self):

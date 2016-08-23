@@ -3,3 +3,4 @@ config.ini
 *.pub
 helper
 /.idea
+log_filename.txt
